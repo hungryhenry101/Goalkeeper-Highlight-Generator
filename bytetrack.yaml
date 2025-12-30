@@ -1,0 +1,11 @@
+tracker_type: bytetrack
+
+track_high_thresh: 0.4  # 降低高阈值
+track_low_thresh: 0.05  # 降低低阈值，以便跟踪更多低置信度检测（如守门员、边裁）
+new_track_thresh: 0.5   # 降低新轨迹阈值
+
+track_buffer: 40
+
+match_thresh: 0.8
+
+fuse_score: true
