@@ -25,7 +25,7 @@ colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
 color_idx = 0
 
 # Change your ids here, can add multiple ids
-selected_ids = [17, 21, 5, 9]
+selected_ids = [36,10,59]
 
 # Store handles and labels for custom legend
 all_handles = []
@@ -57,6 +57,11 @@ for track_id in selected_ids:
     # Mark end point (without legend label)
     ax.scatter(data['raw_x'][-1], data['raw_y'][-1], 
                color=color, s=120, marker='s', zorder=5, 
+               edgecolors='black', linewidths=1.5)
+    
+    # Mark compensated start point (without legend label)
+    ax.scatter(data['comp_x'][0], data['comp_y'][0], 
+               color=color, s=120, marker='o', zorder=5, 
                edgecolors='black', linewidths=1.5)
     
     color_idx += 1

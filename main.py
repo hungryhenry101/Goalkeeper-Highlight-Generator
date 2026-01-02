@@ -6,16 +6,22 @@ import random
 import numpy as np
 from collections import defaultdict, deque
 
-model = YOLO("./models/yolo11m.pt") # YOUR MODEL PATH HERE
-
+MODEL_PATH = "./models/best.pt"  # YOUR MODEL PATH HERE
 VIDEO_PATH = "./input_vids/test1.mp4" # YOUR VIDEO PATH HERE
 OUTPUT_VIDEO = "./output/out.mp4"
-CONF_THRES = 0.15  # 降低阈值以提高检测率，特别是对守门员和边裁
+CONF_THRES = 0.15  # 降低阈值以提高检测率
+
+player_model = YOLO(MODEL_PATH)
+ball_model = YOLO(MODEL_PATH)
+names = player_model.names    
+name2id = {v: k for k, v in player_model.names.items()}
+ball_cls = name2id["ball"]
 
 csv_file = open("./output/track_log.csv", "w", newline="")
 csv_writer = csv.writer(csv_file)
 csv_writer.writerow(["frame","id","raw_x","raw_y","comp_x","comp_y","dx","dy","dist"])
 
+# VIDEO PROCESSING
 cap = cv2.VideoCapture(VIDEO_PATH)
 fps = cap.get(cv2.CAP_PROP_FPS)
 width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -25,12 +31,13 @@ total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 writer = cv2.VideoWriter(OUTPUT_VIDEO, fourcc, fps, (width, height))
 
+# CMC
 track_colors = {}
-prev_gray = None  # previous grayscale frame for motion compensation
-ref_gray = None   # reference frame (first frame) for motion compensation
+prev_gray = None  # previous grayscale frame
+ref_gray = None   # reference frame
+grays = deque(maxlen=10)
 
-# store per-track raw and compensated trajectories
-# raw_traj and comp_traj are dicts: track_id -> deque of (x,y)
+# raw and compensated trajectories (players)
 raw_traj = defaultdict(lambda: deque(maxlen=50))
 comp_traj = defaultdict(lambda: deque(maxlen=50))
 
@@ -59,40 +66,62 @@ def draw_traj(frame, traj, color):
         cv2.line(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
 
 cv2.namedWindow("preview", cv2.WINDOW_NORMAL)
+cv2.namedWindow("CMC Mask", cv2.WINDOW_NORMAL)
+cv2.namedWindow("CMC Optical Flow", cv2.WINDOW_NORMAL)
 for frame_idx in tqdm(range(total_frames)):
     ret, frame = cap.read()
     if not ret:
         break
+    
+    raw_frame = frame.copy() # For CMC
 
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    ball_detect = ball_model(
+        frame,
+        conf=0.05,
+        classes=[ball_cls],
+        verbose=False
+    )
+    for box in ball_detect[0].boxes:
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+        cv2.circle(frame, (cx, cy), 6, (0, 255, 255), -1)
 
-    # Run YOLO tracker to obtain persistent track IDs (use built-in tracker)
-    results = model.track(
+    gray = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2GRAY)
+    grays.append(gray.copy())
+
+    # YOLO tracker
+    results = player_model.track(
         frame,
         persist=True,
         conf=CONF_THRES,
-        classes=[0],  # only persons
         tracker="bytetrack.yaml",
         verbose=False
     )
 
     if not results or results[0].boxes is None or results[0].boxes.id is None:
+        print("no detections")
         writer.write(frame)
         if ref_gray is None:
+            print("first frame set as reference")
             ref_gray = gray.copy()
-        prev_gray = gray
+        else:
+            ref_gray = grays[frame_idx - 9].copy()
+        prev_gray = gray.copy()
         continue
 
     boxes = results[0].boxes
     ids = boxes.id.cpu().numpy()
     xys = boxes.xyxy.cpu().numpy()
 
-    # 初始化参考帧
+    # CMC BELOW HERE
     if ref_gray is None:
+        print("first frame set as reference")
         ref_gray = gray.copy()
         cumulative_M = np.eye(3, dtype=np.float32)
+    else:
+        ref_gray = grays[0].copy()
 
-    # Motion compensation: 计算从上一帧到当前帧的变换，并累积到参考帧
     M_to_ref = None  # 从当前帧到参考帧的变换（用于补偿）
     
     if prev_gray is not None:
@@ -101,54 +130,72 @@ for frame_idx in tqdm(range(total_frames)):
             margin = 10
             mask[max(0, y1-margin):min(height, y2+margin), 
                  max(0, x1-margin):min(width, x2+margin)] = 0
+        for box in ball_detect[0].boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            mask[y1-15:y2+15, x1-15:x2+15] = 0
+        
+        mask_vis = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        mask_vis[mask == 0] = (0, 0, 255)
+        cv2.imshow("CMC Mask", mask_vis)
 
         pts_prev = cv2.goodFeaturesToTrack(
             prev_gray,
-            maxCorners=1000,  # 增加特征点数量
-            qualityLevel=0.02,  # 提高质量阈值，选择更好的特征点
-            minDistance=10,  # 稍微增加最小距离
+            maxCorners=1000,  # 特征点数量
+            qualityLevel=0.02,  # 质量阈值
+            minDistance=10,  # 最小距离
             mask=mask,
-            blockSize=7,  # 使用更大的块大小
+            blockSize=7,  # 块大小
             useHarrisDetector=False,
             k=0.04
         )
 
-        if pts_prev is not None and len(pts_prev) >= 6:  # 需要更多点以提高精度
-            # 使用更大的搜索窗口和更多金字塔层数以提高光流精度
+        if pts_prev is not None and len(pts_prev) >= 6:  # 更多点以提高精度
             pts_curr, status, err = cv2.calcOpticalFlowPyrLK(
                 prev_gray,
                 gray,
                 pts_prev,
                 None,
-                winSize=(31, 31),
-                maxLevel=4,
+                winSize=(31, 31), # 搜索窗口
+                maxLevel=4, #金字塔层数
                 criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01)
             )
             good_mask = (status.flatten() == 1) & (err.flatten() < 10.0)
             good_prev = pts_prev[good_mask]
             good_curr = pts_curr[good_mask]
+            flow_vis = frame.copy()
 
             if len(good_prev) >= 6:  # 至少需要6个点来估计仿射变换
-                # 对于旋转镜头，使用完整的仿射变换（estimateAffine2D）可能更准确
-                # 因为它可以处理任意方向的缩放，而不仅仅是相似变换
                 M, inliers = cv2.estimateAffine2D(
                     good_prev,
                     good_curr,
                     method=cv2.RANSAC,
-                    ransacReprojThreshold=2.0,  # 降低重投影误差阈值，更严格
-                    maxIters=3000,  # 增加迭代次数
-                    confidence=0.995,  # 提高置信度
-                    refineIters=10  # 添加细化迭代
+                    ransacReprojThreshold=2.0,  # 重投影误差阈值
+                    maxIters=3000,  # 迭代次数
+                    confidence=0.995,
+                    refineIters=10  # 细化迭代
                 )
+
+                # 可视化光流
+                for i, (p_prev, p_curr) in enumerate(zip(good_prev, good_curr)):
+                    x0, y0 = p_prev.ravel().astype(int)
+                    x1, y1 = p_curr.ravel().astype(int)
+
+                    if inliers[i]:
+                        color = (0, 255, 0)   # 内点：绿
+                    else:
+                        color = (0, 0, 255)   # 外点：红
+
+                    cv2.circle(flow_vis, (x1, y1), 2, color, -1)
+                    cv2.line(flow_vis, (x0, y0), (x1, y1), color, 1)
+                cv2.imshow("CMC Optical Flow", flow_vis)
+
                 if M is not None and inliers is not None:
-                    # 检查内点比例，确保估计可靠
+                    # 内点比例
                     inlier_ratio = np.sum(inliers) / len(inliers) if len(inliers) > 0 else 0
-                    if inlier_ratio > 0.5:  # 至少50%的点是内点
-                        # 检查变换矩阵是否有效（避免退化情况）
+                    if inlier_ratio > 0.5:  # 至少一半是内点
                         # 计算变换的尺度因子，如果变化太大可能是错误的估计
                         scale_x = np.sqrt(M[0,0]**2 + M[0,1]**2)
                         scale_y = np.sqrt(M[1,0]**2 + M[1,1]**2)
-                        # 允许一定的尺度变化范围（0.5到2.0），更严格的范围
                         if 0.5 < scale_x < 2.0 and 0.5 < scale_y < 2.0:
                             # 检查旋转角度是否合理（避免极端旋转）
                             det = M[0,0] * M[1,1] - M[0,1] * M[1,0]
@@ -176,18 +223,25 @@ for frame_idx in tqdm(range(total_frames)):
                                 cumulative_M_inv = np.linalg.inv(cumulative_M)
                                 M_to_ref = cumulative_M_inv[:2, :]  # 提取前两行得到2x3矩阵
                             else:
+                                print("det too small")
                                 M_to_ref = None
                         else:
+                            print("scale out of bounds")
                             M_to_ref = None
                     else:
+                        print("low inlier ratio")
                         M_to_ref = None
                 else:
+                    print("M is None or inliers is None")
                     M_to_ref = None
             else:
+                print("good prev < 6")
                 M_to_ref = None
         else:
+            print("Not enough good points")
             M_to_ref = None
     else:
+        print("prev_gray is None")
         M_to_ref = None
 
     # Update trajectories and draw per-track
@@ -228,7 +282,7 @@ for frame_idx in tqdm(range(total_frames)):
             2
         )
 
-    prev_gray = gray
+    prev_gray = gray.copy()
     delay = max(1, int(1000 / fps))
     cv2.imshow("preview", frame)
     if cv2.waitKey(delay) & 0xFF == ord('q'):
