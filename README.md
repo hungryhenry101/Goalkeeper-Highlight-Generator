@@ -18,7 +18,7 @@
 
 ## 使用的技术与依赖
 
-- 检测模型：YOLOv11m
+- 检测模型：[football-players-detection](https://universe.roboflow.com/roboflow-jvuqo/football-players-detection-3zvbcYOLOv11m)
 - 跟踪器：ByteTrack（配置文件 `bytetrack.yaml`）
 - 可视化：OpenCV
 - 语言：Python 3.10
@@ -33,7 +33,7 @@ pip install -r requirements.txt
 
 ## 使用教程
 
-> 模型文件仅测试过 YOLOv11m，可在 huggingface 上下载；
+> 模型文件 ~~曾使用 YOLOv11m~~ [football-players-detection](https://universe.roboflow.com/roboflow-jvuqo/football-players-detection-3zvbcYOLOv11m)，自行训练或在 [蓝奏云](https://wwbcc.lanzoup.com/iDH023f1y7zg) 下载模型
 > 测试比赛视频已内置于 `input_vids/` 中
 
 1. 将模型文件放入 `models/`, 将比赛视频放入 `input_vids/` 
