@@ -5,7 +5,7 @@ import cv2
 class CMC:
     def __init__(self):
         self.optical_flow_visible = False
-        self.mask_visible = False
+        self.mask_visible = True
 
         self.prev_gray = None  # previous grayscale frame
         self.ref_gray = None   # reference frame
@@ -22,7 +22,7 @@ class CMC:
         if self.mask_visible:
             cv2.namedWindow("CMC Mask", cv2.WINDOW_NORMAL)
 
-    def compensating(self, ball_detect,xys,frame):
+    def compensating(self, ball_xy ,xys,frame):
         if self.ref_gray is None:
             print("first frame set as reference")
             self.ref_gray = self.grays[0].copy()
@@ -38,13 +38,18 @@ class CMC:
                 margin = 10
                 mask[max(0, y1-margin):min(self.height, y2+margin), 
                     max(0, x1-margin):min(self.width, x2+margin)] = 0
-            for box in ball_detect[0].boxes:
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                mask[y1-15:y2+15, x1-15:x2+15] = 0
+            if ball_xy is not None:
+                cx, cy = ball_xy
+                mask[max(0, cy-15):min(self.height, cy+15), 
+                    max(0, cx-15):min(self.width, cx+15)] = 0
             
             # Visualize mask if enabled
             if self.mask_visible:
-                mask_vis = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                if frame.ndim == 2 or (frame.ndim == 3 and frame.shape[2] == 1):
+                    mask_vis = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                else:
+                    mask_vis = frame.copy()
+                # avoid modifying original frame
                 mask_vis[mask == 0] = (0, 0, 255)
                 cv2.imshow("CMC Mask", mask_vis)
 

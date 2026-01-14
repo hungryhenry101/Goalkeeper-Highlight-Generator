@@ -85,9 +85,16 @@ for frame_idx in tqdm(range(total_frames)):
 
     # Ball tracking
     ball_tracker.ball_detection(ball_detect[0].boxes)
-
-    if ball_tracker.miss < ball_tracker.MAX_MISS:
-        cv2.circle(frame, ball_tracker.ball_xy, 6, (0,255,255), -1)
+    cv2.circle(frame, ball_tracker.ball_xy, 6, (0,255,255), -1)
+    cv2.putText(
+        frame,
+        f"Ball: {ball_tracker.ball_state}",
+        (10,30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.0,
+        (0,255,255),
+        2
+    )
 
     compensator.gray = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2GRAY)
     compensator.grays.append(compensator.gray.copy())
@@ -117,9 +124,7 @@ for frame_idx in tqdm(range(total_frames)):
     xys = boxes.xyxy.cpu().numpy()
 
     # Camera Motion Compensation
-    compensator.ball_detect = ball_detect
-    compensator.optical_flow_visible = True
-    compensator.compensating(ball_detect, xys,frame)
+    compensator.compensating(ball_tracker.ball_xy, xys,frame)
 
     # Update trajectories and draw per-track
     for tid, (x1, y1, x2, y2) in zip(ids, xys):
