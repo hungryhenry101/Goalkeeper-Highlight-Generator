@@ -25,7 +25,7 @@ colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
 color_idx = 0
 
 # Change your ids here, can add multiple ids
-selected_ids = [36,10,59]
+selected_ids = [36,7,57]
 
 # Store handles and labels for custom legend
 all_handles = []

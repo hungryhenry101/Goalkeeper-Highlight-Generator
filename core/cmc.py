@@ -3,7 +3,7 @@ import numpy as np
 import cv2
 
 class CMC:
-    def __init__(self):
+    def __init__(self, width, height):
         self.optical_flow_visible = False
         self.mask_visible = True
 
@@ -11,11 +11,15 @@ class CMC:
         self.ref_gray = None   # reference frame
         self.gray = None        # current grayscale frame
         self.grays = deque(maxlen=10)
-        self.width = None
-        self.height = None
+        self.width = width
+        self.height = height
         self.M_to_ref = None  # transformation matrix to reference frame
         self.transform_history = deque(maxlen=5)  # store recent transforms for smoothing
         self.cumulative_M = np.eye(3, dtype=np.float32)  # 从参考帧到当前帧的累积变换
+
+        self.flow_magnitude_acc = np.zeros((height, width), dtype=np.float32)
+        self.flow_count = np.zeros((height, width), dtype=np.uint16)
+        self.ui_mask = np.ones((height, width), dtype=np.uint8) * 255
 
         if self.optical_flow_visible:
             cv2.namedWindow("CMC Optical Flow", cv2.WINDOW_NORMAL)
@@ -23,24 +27,40 @@ class CMC:
             cv2.namedWindow("CMC Mask", cv2.WINDOW_NORMAL)
 
     def compensating(self, ball_xy ,xys,frame):
+        # 光流向量小 => UI， 进行排除
+        avg_flow = np.zeros_like(self.flow_magnitude_acc)
+        valid = self.flow_count > 20
+        
+        detection_mask = np.ones((self.height, self.width), dtype=np.uint8) * 255
+                
         if self.ref_gray is None:
             print("first frame set as reference")
             self.ref_gray = self.grays[0].copy()
             self.cumulative_M = np.eye(3, dtype=np.float32)
         else:
             self.ref_gray = self.grays[0].copy()
-
-        self.M_to_ref = None  # 从当前帧到参考帧的变换（用于补偿）
-        
+            
+        if self.M_to_ref is not None:
+            camera_speed = np.linalg.norm(self.M_to_ref[:, 2]) 
+            if camera_speed > 0.5: 
+                avg_flow[valid] = self.flow_magnitude_acc[valid] / self.flow_count[valid]
+                self.ui_mask[valid & (avg_flow < 0.1)] = 0
+                
+                # print the count of ui_mask == 0
+                print(f"masked pixels: {(self.ui_mask == 0).sum()}; valid count: {valid.sum()}")
+            else:
+                print("Camera speed too low, skipping UI mask update")
+        else:
+            print("M_to_ref is None, skipping UI mask update")
+            
         if self.prev_gray is not None:
-            mask = np.ones_like(self.gray, dtype=np.uint8) * 255
             for x1, y1, x2, y2 in xys.astype(int):
                 margin = 10
-                mask[max(0, y1-margin):min(self.height, y2+margin), 
+                detection_mask[max(0, y1-margin):min(self.height, y2+margin), 
                     max(0, x1-margin):min(self.width, x2+margin)] = 0
             if ball_xy is not None:
                 cx, cy = ball_xy
-                mask[max(0, cy-15):min(self.height, cy+15), 
+                detection_mask[max(0, cy-15):min(self.height, cy+15), 
                     max(0, cx-15):min(self.width, cx+15)] = 0
             
             # Visualize mask if enabled
@@ -50,7 +70,14 @@ class CMC:
                 else:
                     mask_vis = frame.copy()
                 # avoid modifying original frame
-                mask_vis[mask == 0] = (0, 0, 255)
+                #mask_vis[detection_mask == 0] = (0, 0, 255) # red
+                #mask_vis[self.ui_mask == 0] = (255, 0, 0) # blue
+                #把ui_mask周围10px的区域也标记
+                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (21, 21))
+                ui_mask_dilated = cv2.dilate(self.ui_mask == 0, kernel)
+                mask_vis[ui_mask_dilated] = (255, 255, 0) 
+                print(f"UI Masked pixels (dilated): {ui_mask_dilated.sum()}")
+                
                 cv2.imshow("CMC Mask", mask_vis)
 
             pts_prev = cv2.goodFeaturesToTrack(
@@ -58,22 +85,38 @@ class CMC:
                 maxCorners=1000,  # 特征点数量
                 qualityLevel=0.02,  # 质量阈值
                 minDistance=10,  # 最小距离
-                mask=mask,
+                mask=detection_mask,
                 blockSize=7,  # 块大小
                 useHarrisDetector=False,
                 k=0.04
             )
 
-            if pts_prev is not None and len(pts_prev) >= 6:  # 更多点以提高精度
+            if pts_prev is not None and len(pts_prev) >= 6:
                 pts_curr, status, err = cv2.calcOpticalFlowPyrLK(
                     self.prev_gray,
                     self.gray,
                     pts_prev,
                     None,
                     winSize=(31, 31), # 搜索窗口
-                    maxLevel=4, #金字塔层数
+                    maxLevel=4,
                     criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01)
                 )
+                
+                # 计算光流矢量及其幅值用于 UI 排除
+                flow = pts_curr - pts_prev
+                flow_mag = np.linalg.norm(flow, axis=2).flatten()
+
+                for (x, y), mag, ok in zip(
+                        pts_prev.reshape(-1, 2),
+                        flow_mag,
+                        status.flatten()):
+                    if not ok:
+                        continue
+                    x, y = int(x), int(y)
+                    self.flow_magnitude_acc[y, x] += mag
+                    self.flow_count[y, x] += 1
+            
+                # 仅使用状态为1且误差较小的点进行变换估计
                 good_mask = (status.flatten() == 1) & (err.flatten() < 10.0)
                 good_prev = pts_prev[good_mask]
                 good_curr = pts_curr[good_mask]

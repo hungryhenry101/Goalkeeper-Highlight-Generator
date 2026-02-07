@@ -5,7 +5,7 @@ import csv
 import random
 import numpy as np
 from collections import defaultdict, deque
-import core.kalman as kalman
+import core.ball_tracker as ball_tracker
 import core.cmc as cmc
 
 MODEL_PATH = "./models/best.pt"  # YOUR MODEL PATH HERE
@@ -34,12 +34,10 @@ fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 writer = cv2.VideoWriter(OUTPUT_VIDEO, fourcc, fps, (width, height))
 
 # Ball Tracker
-ball_tracker = kalman.KalmanBallTracker()
+football_tracker = ball_tracker.BallTracker()
 
 # CMC
-compensator = cmc.CMC()
-compensator.width = width
-compensator.height = height
+compensator = cmc.CMC(width, height)
 
 track_colors = {}
 
@@ -68,7 +66,6 @@ def draw_traj(frame, traj, color):
         cv2.line(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
 
 cv2.namedWindow("preview", cv2.WINDOW_NORMAL)
-#cv2.namedWindow("CMC Mask", cv2.WINDOW_NORMAL)
 for frame_idx in tqdm(range(total_frames)):
     ret, frame = cap.read()
     if not ret:
@@ -84,11 +81,11 @@ for frame_idx in tqdm(range(total_frames)):
     )
 
     # Ball tracking
-    ball_tracker.ball_detection(ball_detect[0].boxes)
-    cv2.circle(frame, ball_tracker.ball_xy, 6, (0,255,255), -1)
+    football_tracker.ball_detection(ball_detect[0].boxes)
+    cv2.circle(frame, football_tracker.ball_xy, 6, (0,255,255), -1)
     cv2.putText(
         frame,
-        f"Ball: {ball_tracker.ball_state}",
+        f"Ball: {football_tracker.ball_state}",
         (10,30),
         cv2.FONT_HERSHEY_SIMPLEX,
         1.0,
@@ -124,7 +121,7 @@ for frame_idx in tqdm(range(total_frames)):
     xys = boxes.xyxy.cpu().numpy()
 
     # Camera Motion Compensation
-    compensator.compensating(ball_tracker.ball_xy, xys,frame)
+    compensator.compensating(football_tracker.ball_xy, xys,frame)
 
     # Update trajectories and draw per-track
     for tid, (x1, y1, x2, y2) in zip(ids, xys):
