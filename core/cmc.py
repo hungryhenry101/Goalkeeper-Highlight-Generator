@@ -69,14 +69,20 @@ class CMC:
                     mask_vis = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
                 else:
                     mask_vis = frame.copy()
-                # avoid modifying original frame
-                #mask_vis[detection_mask == 0] = (0, 0, 255) # red
-                #mask_vis[self.ui_mask == 0] = (255, 0, 0) # blue
-                #把ui_mask周围10px的区域也标记
-                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (21, 21))
-                ui_mask_dilated = cv2.dilate(self.ui_mask == 0, kernel)
-                mask_vis[ui_mask_dilated] = (255, 255, 0) 
-                print(f"UI Masked pixels (dilated): {ui_mask_dilated.sum()}")
+                
+                ui_mask_marked = (self.ui_mask == 0)
+                
+                # dilate 10px
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21))  # ~10px radius
+                ui_dilated = cv2.dilate(ui_mask_marked.astype(np.uint8), kernel, iterations=1)
+                mask_vis[ui_dilated > 0] = [255, 255, 0]  # cyan
+                
+                # actual ui-marked pixels
+                mask_vis[ui_mask_marked] = [0, 255, 255]  # yellow
+                
+                # detection_mask visualization
+                detection_marked = (detection_mask == 0)
+                mask_vis[detection_marked] = [0, 0, 255]  # red
                 
                 cv2.imshow("CMC Mask", mask_vis)
 
