@@ -1,3 +1,8 @@
-models/*
 __pycache__/
 .DS_Store
+
+models/*
+
+output/out.mp4
+output/track_log.csv
+output/track_trajectories.png

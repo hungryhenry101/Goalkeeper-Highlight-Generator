@@ -1,3 +1,5 @@
+import os
+import sys
 import cv2
 from ultralytics import YOLO
 from tqdm import tqdm
@@ -9,7 +11,7 @@ import core.ball_tracker as ball_tracker
 import core.cmc as cmc
 
 MODEL_PATH = "./models/best.pt"  # YOUR MODEL PATH HERE
-VIDEO_PATH = "./input_vids/test1.mp4" # YOUR VIDEO PATH HERE
+VIDEO_PATH = "./input_vids/test2.mp4" # YOUR VIDEO PATH HERE
 OUTPUT_VIDEO = "./output/out.mp4"
 CONF_THRES = 0.15  # 降低阈值以提高检测率
 
@@ -36,16 +38,19 @@ writer = cv2.VideoWriter(OUTPUT_VIDEO, fourcc, fps, (width, height))
 # Ball Tracker
 football_tracker = ball_tracker.BallTracker()
 
-# CMC
-compensator = cmc.CMC(width, height)
-
 track_colors = {}
 
 # raw and compensated trajectories (players)
 raw_traj = defaultdict(lambda: deque(maxlen=50))
 comp_traj = defaultdict(lambda: deque(maxlen=50))
 
-# 累积变换矩阵：从参考帧（第一帧）到当前帧的变换
+def has_display():
+    if sys.platform == 'darwin' or sys.platform == 'win32':
+        return True  # macOS and windows always has a display
+    return 'DISPLAY' in os.environ and os.environ['DISPLAY']
+
+# CMC
+compensator = cmc.CMC(width, height, has_display())
 
 def get_color(track_id):
     if track_id not in track_colors:
@@ -65,7 +70,8 @@ def draw_traj(frame, traj, color):
         x2, y2 = pts[i]
         cv2.line(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
 
-cv2.namedWindow("preview", cv2.WINDOW_NORMAL)
+if has_display:
+    cv2.namedWindow("preview", cv2.WINDOW_NORMAL)
 for frame_idx in tqdm(range(total_frames)):
     ret, frame = cap.read()
     if not ret:
@@ -94,7 +100,6 @@ for frame_idx in tqdm(range(total_frames)):
     )
 
     compensator.gray = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2GRAY)
-    compensator.grays.append(compensator.gray.copy())
 
     # YOLO tracker
     results = player_model.track(
@@ -108,11 +113,6 @@ for frame_idx in tqdm(range(total_frames)):
     if not results or results[0].boxes is None or results[0].boxes.id is None:
         print("no detections")
         writer.write(frame)
-        if compensator.ref_gray is None:
-            print("first frame set as reference")
-            compensator.ref_gray = compensator.grays[0].copy()
-        else:
-            compensator.ref_gray = compensator.grays[frame_idx - 9].copy()
         compensator.prev_gray = compensator.gray.copy()
         continue
 
@@ -163,9 +163,10 @@ for frame_idx in tqdm(range(total_frames)):
 
     compensator.prev_gray = compensator.gray.copy()
     delay = max(1, int(1000 / fps))
-    cv2.imshow("preview", frame)
-    if cv2.waitKey(delay) & 0xFF == ord('q'):
-        break
+    if has_display:
+        cv2.imshow("preview", frame)
+        if cv2.waitKey(delay) & 0xFF == ord('q'):
+            break
     writer.write(frame)
 cv2.destroyAllWindows()
 cap.release()

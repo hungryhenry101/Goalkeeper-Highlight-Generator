@@ -3,14 +3,12 @@ import numpy as np
 import cv2
 
 class CMC:
-    def __init__(self, width, height):
-        self.optical_flow_visible = False
-        self.mask_visible = True
+    def __init__(self, width, height, has_display):
+        self.optical_flow_visible = has_display
+        self.mask_visible = has_display
 
         self.prev_gray = None  # previous grayscale frame
-        self.ref_gray = None   # reference frame
         self.gray = None        # current grayscale frame
-        self.grays = deque(maxlen=10)
         self.width = width
         self.height = height
         self.M_to_ref = None  # transformation matrix to reference frame
@@ -32,13 +30,9 @@ class CMC:
         valid = self.flow_count > 20
         
         detection_mask = np.ones((self.height, self.width), dtype=np.uint8) * 255
-                
-        if self.ref_gray is None:
-            print("first frame set as reference")
-            self.ref_gray = self.grays[0].copy()
+        
+        if self.prev_gray is None:
             self.cumulative_M = np.eye(3, dtype=np.float32)
-        else:
-            self.ref_gray = self.grays[0].copy()
             
         if self.M_to_ref is not None:
             camera_speed = np.linalg.norm(self.M_to_ref[:, 2]) 
@@ -189,22 +183,15 @@ class CMC:
                                     self.M_to_ref = cumulative_M_inv[:2, :]  # 提取前两行得到2x3矩阵
                                 else:
                                     print("det too small")
-                                    self.M_to_ref = None
                             else:
                                 print("scale out of bounds")
-                                self.M_to_ref = None
                         else:
                             print("low inlier ratio")
-                            self.M_to_ref = None
                     else:
                         print("M is None or inliers is None")
-                        self.M_to_ref = None
                 else:
                     print("good prev < 6")
-                    self.M_to_ref = None
             else:
                 print("Not enough good points")
-                self.M_to_ref = None
         else:
             print("prev_gray is None")
-            self.M_to_ref = None        
