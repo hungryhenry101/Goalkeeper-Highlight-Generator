@@ -2,7 +2,7 @@
 
 目前该项目为研究/学习级产品，用于跟踪足球比赛中的人和球，并识别出守门员、计算威胁程度，用于最终自动生成守门员处理球集锦（未实现）。
 
-![demo-vid](output/demo.gif)
+<video src="./output/demo.mp4" autoplay loop muted width="800"></video>
 <p align="center">输出视频示例</p>
 
 ![track_trajectories](output/detailed.png)
@@ -52,7 +52,7 @@ pip install -r requirements.txt
 - [ ] 威胁度评分（结合位置、球速、对方球员密度等特征）
 - [ ] 守门员姿态分析、运动速度轨迹分析
 
-more detailed in [TODO.md](TODO.md)
+more detailed in [TODO.md](docs/TODO.md)
 
 ---
 

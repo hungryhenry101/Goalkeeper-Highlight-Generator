@@ -1,6 +1,13 @@
 import numpy as np
 from filterpy.kalman import KalmanFilter
-from scipy.stats import chi2
+
+
+def is_valid_measurement(kf, z, thresh=40):  # 95%, 2D
+    y = z - kf.H @ kf.x
+    S = kf.H @ kf.P @ kf.H.T + kf.R
+    d = y.T @ np.linalg.inv(S) @ y
+    return d < thresh
+
 
 class BallTracker:
     def __init__(self):
@@ -30,13 +37,6 @@ class BallTracker:
 
         self.ball_state = "VISIBLE"
 
-
-    def is_valid_measurement(self, kf, z, thresh=40):  # 95%, 2D
-        y = z - kf.H @ kf.x
-        S = kf.H @ kf.P @ kf.H.T + kf.R
-        d = y.T @ np.linalg.inv(S) @ y
-        return d < thresh
-    
     def select_ball(self, dets, prev_xy, max_dist, is_initialized):
         if len(dets) == 0:
             return None
@@ -93,7 +93,7 @@ class BallTracker:
                 return # Skip update for the first frame to stabilize
 
             # Validation gate (only if already tracking)
-            if self.is_valid_measurement(self.kf, z):
+            if is_valid_measurement(self.kf, z):
                 self.kf.update(z)
                 self.ball_state = "VISIBLE"
                 self.miss = 0

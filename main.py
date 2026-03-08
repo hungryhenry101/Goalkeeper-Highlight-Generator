@@ -11,7 +11,7 @@ import core.ball_tracker as ball_tracker
 import core.cmc as cmc
 
 MODEL_PATH = "./models/best.pt"  # YOUR MODEL PATH HERE
-VIDEO_PATH = "./input_vids/test2.mp4" # YOUR VIDEO PATH HERE
+VIDEO_PATH = "./input_vids/test1.mp4" # YOUR VIDEO PATH HERE
 OUTPUT_VIDEO = "./output/out.mp4"
 CONF_THRES = 0.15  # 降低阈值以提高检测率
 
@@ -121,7 +121,7 @@ for frame_idx in tqdm(range(total_frames)):
     xys = boxes.xyxy.cpu().numpy()
 
     # Camera Motion Compensation
-    compensator.compensating(football_tracker.ball_xy, xys,frame)
+    compensator.compensating(football_tracker.ball_xy, xys, frame)
 
     # Update trajectories and draw per-track
     for tid, (x1, y1, x2, y2) in zip(ids, xys):

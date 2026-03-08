@@ -1,10 +1,10 @@
 from collections import deque
 import numpy as np
 import cv2
+from core.ui_mask import UIMaskDetector
 
 class CMC:
     def __init__(self, width, height, has_display):
-        self.optical_flow_visible = has_display
         self.mask_visible = has_display
 
         self.prev_gray = None  # previous grayscale frame
@@ -15,78 +15,60 @@ class CMC:
         self.transform_history = deque(maxlen=5)  # store recent transforms for smoothing
         self.cumulative_M = np.eye(3, dtype=np.float32)  # 从参考帧到当前帧的累积变换
 
-        self.flow_magnitude_acc = np.zeros((height, width), dtype=np.float32)
-        self.flow_count = np.zeros((height, width), dtype=np.uint16)
-        self.ui_mask = np.ones((height, width), dtype=np.uint8) * 255
+        self.ui_detector = UIMaskDetector(width, height)
+        self.ui_mask = self.ui_detector.ui_mask
 
-        if self.optical_flow_visible:
-            cv2.namedWindow("CMC Optical Flow", cv2.WINDOW_NORMAL)
         if self.mask_visible:
             cv2.namedWindow("CMC Mask", cv2.WINDOW_NORMAL)
 
-    def compensating(self, ball_xy ,xys,frame):
-        # 光流向量小 => UI， 进行排除
-        avg_flow = np.zeros_like(self.flow_magnitude_acc)
-        valid = self.flow_count > 20
-        
+    def compensating(self, ball_xy, xys, frame):
         detection_mask = np.ones((self.height, self.width), dtype=np.uint8) * 255
-        
+
         if self.prev_gray is None:
             self.cumulative_M = np.eye(3, dtype=np.float32)
-            
+
         if self.M_to_ref is not None:
-            camera_speed = np.linalg.norm(self.M_to_ref[:, 2]) 
-            if camera_speed > 0.5: 
-                avg_flow[valid] = self.flow_magnitude_acc[valid] / self.flow_count[valid]
-                self.ui_mask[valid & (avg_flow < 0.1)] = 0
-                
-                # print the count of ui_mask == 0
-                print(f"masked pixels: {(self.ui_mask == 0).sum()}; valid count: {valid.sum()}")
+            has_motion, motion_strength = self.ui_detector.check_camera_motion(self.M_to_ref)
+            if has_motion:
+                print(f"Camera motion detected (strength: {motion_strength:.2f})")
             else:
-                print("Camera speed too low, skipping UI mask update")
+                print("Camera motion too low, skipping UI mask update")
+                self.ui_detector.soft_reset()
         else:
             print("M_to_ref is None, skipping UI mask update")
-            
+
         if self.prev_gray is not None:
             for x1, y1, x2, y2 in xys.astype(int):
                 margin = 10
-                detection_mask[max(0, y1-margin):min(self.height, y2+margin), 
+                detection_mask[max(0, y1-margin):min(self.height, y2+margin),
                     max(0, x1-margin):min(self.width, x2+margin)] = 0
             if ball_xy is not None:
                 cx, cy = ball_xy
-                detection_mask[max(0, cy-15):min(self.height, cy+15), 
+                detection_mask[max(0, cy-15):min(self.height, cy+15),
                     max(0, cx-15):min(self.width, cx+15)] = 0
-            
+
             # Visualize mask if enabled
             if self.mask_visible:
                 if frame.ndim == 2 or (frame.ndim == 3 and frame.shape[2] == 1):
                     mask_vis = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
                 else:
                     mask_vis = frame.copy()
-                
+
                 ui_mask_marked = (self.ui_mask == 0)
-                
-                # dilate 10px
-                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21))  # ~10px radius
-                ui_dilated = cv2.dilate(ui_mask_marked.astype(np.uint8), kernel, iterations=1)
-                mask_vis[ui_dilated > 0] = [255, 255, 0]  # cyan
-                
-                # actual ui-marked pixels
-                mask_vis[ui_mask_marked] = [0, 255, 255]  # yellow
-                
-                # detection_mask visualization
+                mask_vis[ui_mask_marked] = [0, 255, 255]
+
                 detection_marked = (detection_mask == 0)
-                mask_vis[detection_marked] = [0, 0, 255]  # red
-                
+                mask_vis[detection_marked] = [0, 0, 255]
+
                 cv2.imshow("CMC Mask", mask_vis)
 
             pts_prev = cv2.goodFeaturesToTrack(
                 self.prev_gray,
-                maxCorners=1000,  # 特征点数量
-                qualityLevel=0.02,  # 质量阈值
-                minDistance=10,  # 最小距离
+                maxCorners=1000,
+                qualityLevel=0.02,
+                minDistance=10,
                 mask=detection_mask,
-                blockSize=7,  # 块大小
+                blockSize=7,
                 useHarrisDetector=False,
                 k=0.04
             )
@@ -97,15 +79,15 @@ class CMC:
                     self.gray,
                     pts_prev,
                     None,
-                    winSize=(31, 31), # 搜索窗口
+                    winSize=(31, 31),
                     maxLevel=4,
                     criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01)
                 )
-                
-                # 计算光流矢量及其幅值用于 UI 排除
+
                 flow = pts_curr - pts_prev
                 flow_mag = np.linalg.norm(flow, axis=2).flatten()
 
+                flow_data = []
                 for (x, y), mag, ok in zip(
                         pts_prev.reshape(-1, 2),
                         flow_mag,
@@ -113,9 +95,19 @@ class CMC:
                     if not ok:
                         continue
                     x, y = int(x), int(y)
-                    self.flow_magnitude_acc[y, x] += mag
-                    self.flow_count[y, x] += 1
-            
+                    flow_data.append((x, y, mag))
+
+                # UI MASK
+                if self.M_to_ref is not None:
+                    self.ui_mask = self.ui_detector.update(
+                        flow_data,
+                        pts_prev.reshape(-1, 2),
+                        self.M_to_ref,
+                        self.gray
+                    )
+                    debug_info = self.ui_detector.get_debug_info()
+                    print(f"UI pixels: {debug_info['ui_pixels']}; Valid points: {debug_info['valid_points']}; Confidence: {debug_info['confidence_mean']:.3f}")
+
                 # 仅使用状态为1且误差较小的点进行变换估计
                 good_mask = (status.flatten() == 1) & (err.flatten() < 10.0)
                 good_prev = pts_prev[good_mask]
@@ -133,20 +125,18 @@ class CMC:
                         refineIters=10  # 细化迭代
                     )
 
-                    # 可视化光流(if enabled)
-                    if self.optical_flow_visible:
-                        for i, (p_prev, p_curr) in enumerate(zip(good_prev, good_curr)):
-                            x0, y0 = p_prev.ravel().astype(int)
-                            x1, y1 = p_curr.ravel().astype(int)
+                    # 可视化光流
+                    for i, (p_prev, p_curr) in enumerate(zip(good_prev, good_curr)):
+                        x0, y0 = p_prev.ravel().astype(int)
+                        x1, y1 = p_curr.ravel().astype(int)
 
-                            if inliers[i]:
-                                color = (0, 255, 0)   # 内点：绿
-                            else:
-                                color = (0, 0, 255)   # 外点：红
+                        if inliers[i]:
+                            color = (0, 255, 0)   # 内点：绿
+                        else:
+                            color = (0, 0, 255)   # 外点：红
 
-                            cv2.circle(flow_vis, (x1, y1), 2, color, -1)
-                            cv2.line(flow_vis, (x0, y0), (x1, y1), color, 1)
-                        cv2.imshow("CMC Optical Flow", flow_vis)
+                        cv2.circle(flow_vis, (x1, y1), 2, color, -1)
+                        cv2.line(flow_vis, (x0, y0), (x1, y1), color, 1)
 
                     if M is not None and inliers is not None:
                         # 内点比例
